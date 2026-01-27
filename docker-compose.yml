@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  ai-security:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ai_self_healing
+    volumes:
+      - ./src:/app/src
+    command: python src/main.py
