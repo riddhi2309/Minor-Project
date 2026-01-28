@@ -7,15 +7,20 @@ on:
     branches: [ "main" ]
 
 jobs:
-  docker-build:
+  build-and-validate:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Build Docker image
         run: docker build -f docker/Dockerfile -t ai-self-healing .
+
+      - name: Dependency sanity check
+        run: |
+          docker run --rm ai-self-healing python - <<EOF
+          import numpy, pandas, sklearn
+          import nltk, regex, pydantic, yaml
+          print("Setup validation successful")
+          EOF

@@ -5,7 +5,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: ai_self_healing
+    container_name: agentic-llm-security
     volumes:
       - ./src:/app/src
-    command: python src/main.py
+      - ./logs:/app/logs
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
