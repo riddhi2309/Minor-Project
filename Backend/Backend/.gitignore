@@ -1,0 +1,12 @@
+# Virtual environments
+.venv/
+Backend/.venv/
+
+# VS Code settings
+.vscode/
+
+# Models (backend)
+Backend/models/
+
+# Specific file
+Backend/src/chatbot/OllamaSetup.exe

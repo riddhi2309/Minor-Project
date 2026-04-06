@@ -1,0 +1,14 @@
+governance:
+  logging: true
+  explainability: true
+  audit_retention_days: 30
+
+thresholds:
+  jailbreak: 0.7
+  phishing: 0.65
+  prompt_injection: 0.75
+
+actions:
+  low_risk: allow
+  medium_risk: sanitize
+  high_risk: block

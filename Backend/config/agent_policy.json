@@ -1,0 +1,20 @@
+{
+  "high_risk_intents": [
+    "privilege_escalation",
+    "prompt_injection",
+    "data_exfiltration"
+  ],
+  "restricted_tools": [
+    "shell",
+    "filesystem",
+    "network"
+  ],
+  "blocked_commands": [
+    "rm -rf",
+    "chmod 777",
+    "sudo",
+    "wget",
+    "curl"
+  ],
+  "confidence_threshold": 0.80
+}

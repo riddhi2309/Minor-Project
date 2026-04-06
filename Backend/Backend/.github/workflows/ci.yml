@@ -1,0 +1,26 @@
+name: Docker CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -f docker/Dockerfile -t ai-self-healing .
+
+      - name: Dependency sanity check
+        run: |
+          docker run --rm ai-self-healing python - <<EOF
+          import numpy, pandas, sklearn
+          import nltk, regex, pydantic, yaml
+          print("Setup validation successful")
+          EOF
