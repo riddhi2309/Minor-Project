@@ -1,28 +1,23 @@
 """
-CyberWatch AI - FastAPI Backend
-================================
-Drop this file into your project root (or src/api/).
-It wraps your existing SecurityPipeline and exposes REST endpoints
-that the React frontend consumes.
-
-Install deps:
-    pip install fastapi uvicorn python-multipart
-
-Run:
-    uvicorn main:app --reload --port 8000
+main.py — CyberWatch AI FastAPI backend
+========================================
+Fixed version. Changes:
+  - Reads max_risk from pipeline result (fixes Risk 6/5 display)
+  - Reads real confidence instead of defaulting to 0.95
+  - Passes attack_type as-is (now has 8 categories from pipeline)
+  - risk_score sent as raw value; frontend should display as X / max_risk
 """
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import time, uuid, json, os
+import time, uuid, os
 from datetime import datetime, timedelta
-import random  # remove once real pipeline is integrated
+import random
 
 app = FastAPI(title="CyberWatch AI API", version="1.0.0")
 
-# ── CORS (allow your React dev server) ──────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:5173", "*"],
@@ -31,88 +26,73 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── In-memory log store (replace with DB later) ─────────────────────────────
 LOG_STORE: list[dict] = []
 
-# ── Try to import your real pipeline ────────────────────────────────────────
 try:
-    # Adjust this import path to wherever your SecurityPipeline lives
-    # e.g. from src.pipeline.security_pipeline import SecurityPipeline
     from security_pipeline import SecurityPipeline
     pipeline = SecurityPipeline()
     REAL_PIPELINE = True
     print("✅ Real SecurityPipeline loaded")
-except ImportError:
+except ImportError as e:
     REAL_PIPELINE = False
-    print("⚠️  SecurityPipeline not found — using mock responses (dev mode)")
+    print(f"⚠️  SecurityPipeline not found — using mock responses. Error: {e}")
 
 
-# ── Schemas ──────────────────────────────────────────────────────────────────
+# ── Schemas ───────────────────────────────────────────────────────────────────
 class AnalyzeRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = None
 
 
 class AnalyzeResponse(BaseModel):
-    id: str
-    timestamp: str
+    id:             str
+    timestamp:      str
     prompt_snippet: str
-    final_decision: str          # "ALLOW" | "BLOCK"
-    attack_type: str             # "Safe" | "Injection" | "Jailbreak" | "Suspicious"
-    confidence: float            # 0.0 – 1.0
-    risk_score: int              # 0 – 5
-    details: dict
+    final_decision: str
+    attack_type:    str
+    confidence:     float
+    risk_score:     int
+    max_risk:       int       # ← NEW: frontend shows risk_score/max_risk
+    details:        dict
 
 
-# ── Helper: mock pipeline response ──────────────────────────────────────────
+# ── Mock pipeline (dev mode only) ─────────────────────────────────────────────
 def _mock_analyze(prompt: str) -> dict:
-    """Fallback when real pipeline is unavailable (for UI development)."""
-    injection_keywords = ["ignore previous", "system prompt", "reveal", "password", "database"]
-    jailbreak_keywords = ["dan", "act as", "hypothetical", "jailbreak", "pretend you are"]
+    p = prompt.lower()
+    FINGERPRINTS = {
+        "ROLEPLAY_JAILBREAK":    ["act as", "pretend you are", "play the role"],
+        "PERSONA_SWAP":          ["no restrictions", "no guidelines", "no limits"],
+        "HYPOTHETICAL_BYPASS":   ["hypothetically", "imagine you could"],
+        "POLICY_BYPASS":         ["ignore your policy", "bypass your filter"],
+        "SYSTEM_PROMPT_EXTRACTION": ["reveal your instructions", "show your prompt"],
+        "INSTRUCTION_OVERRIDE":  ["ignore previous", "disregard", "forget your"],
+        "TRAINING_MODE_EXPLOIT": ["developer mode", "debug mode", "training mode"],
+        "INDIRECT_INJECTION":    ["the document says", "according to the context"],
+    }
+    attack_type = "SAFE"
+    for cat, fps in FINGERPRINTS.items():
+        if any(fp in p for fp in fps):
+            attack_type = cat
+            break
+    if attack_type == "SAFE" and any(k in p for k in ["dan", "jailbreak"]):
+        attack_type = "JAILBREAK"
 
-    prompt_lower = prompt.lower()
-    is_injection = any(k in prompt_lower for k in injection_keywords)
-    is_jailbreak = any(k in prompt_lower for k in jailbreak_keywords)
-
-    if is_jailbreak:
-        return {
-            "final_decision": "BLOCK",
-            "attack_type": "Jailbreak",
-            "confidence": round(random.uniform(0.88, 0.97), 3),
-            "risk_score": 5,
-            "details": {
-                "rule_engine": {"triggered": True, "pattern": "roleplay_bypass"},
-                "intent_classifier": {"label": "malicious", "score": 0.94},
-                "jailbreak_model": {"is_jailbreak": True, "probability": 0.95},
-                "guard_llm": {"verdict": "BLOCK", "reason": "Attempts to override model identity"},
-            },
-        }
-    elif is_injection:
-        return {
-            "final_decision": "BLOCK",
-            "attack_type": "Injection",
-            "confidence": round(random.uniform(0.80, 0.92), 3),
-            "risk_score": 4,
-            "details": {
-                "rule_engine": {"triggered": True, "pattern": "prompt_injection"},
-                "intent_classifier": {"label": "malicious", "score": 0.87},
-                "jailbreak_model": {"is_jailbreak": False, "probability": 0.12},
-                "guard_llm": {"verdict": "BLOCK", "reason": "Prompt injection attempt detected"},
-            },
-        }
-    else:
-        return {
-            "final_decision": "ALLOW",
-            "attack_type": "Safe",
-            "confidence": round(random.uniform(0.90, 0.99), 3),
-            "risk_score": 0,
-            "details": {
-                "rule_engine": {"triggered": False, "pattern": None},
-                "intent_classifier": {"label": "benign", "score": 0.96},
-                "jailbreak_model": {"is_jailbreak": False, "probability": 0.02},
-                "guard_llm": {"verdict": "ALLOW", "reason": "No threats detected"},
-            },
-        }
+    is_attack = attack_type != "SAFE"
+    return {
+        "final_decision":  "BLOCK" if is_attack else "ALLOW",
+        "attack_type":     attack_type,
+        "confidence":      round(random.uniform(0.82, 0.97), 3) if is_attack else round(random.uniform(0.90, 0.99), 3),
+        "risk_score":      random.randint(3, 7) if is_attack else random.randint(0, 1),
+        "max_risk":        8,
+        "rule_engine":     {"hits": [], "decision": "SUSPICIOUS" if is_attack else "SAFE"},
+        "intent_classifier": {"intent": "malicious" if is_attack else "benign",
+                              "confidence": 0.91, "decision": "MALICIOUS" if is_attack else "SAFE"},
+        "jailbreak_detector": {"probability": 0.89 if is_attack else 0.03,
+                               "decision": "JAILBREAK DETECTED" if is_attack else "SAFE"},
+        "guard_llm":       {"decision": "BLOCK" if is_attack else "SAFE", "is_blocked": is_attack},
+        "preprocessor":    {"detected_attacks": [], "risk_boost": 0,
+                            "was_modified": False, "flags": {}, "attack_category": ""},
+    }
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -124,47 +104,55 @@ def root():
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze_prompt(req: AnalyzeRequest):
-    """
-    Submit a prompt for security analysis.
-    The pipeline runs all layers and returns a decision + details.
-    """
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     start = time.time()
 
     if REAL_PIPELINE:
-        # ── Call your real pipeline here ──────────────────────────────────
-        # Adjust method name if needed (e.g. pipeline.run(), pipeline.check())
         result = pipeline.analyze(req.prompt)
-        # Expected result keys (adapt to your actual output):
-        # result["final_decision"], result["attack_type"], result["risk_score"], etc.
-        decision = result.get("final_decision", "ALLOW").upper()
-        attack_type = result.get("attack_type", "Safe")
-        confidence = float(result.get("confidence", result.get("jailbreak_probability", 0.95)))
-        risk_score = int(result.get("risk_score", 0))
-        details = {k: v for k, v in result.items() if k not in ["final_decision", "attack_type", "confidence", "risk_score"]}
+
+        decision    = result.get("final_decision", "ALLOW").upper()
+        attack_type = result.get("attack_type", "SAFE")
+
+        # BUG 2 FIX: use real computed confidence, not a hardcoded 0.95
+        confidence  = float(result.get("confidence", 0.5))
+
+        # BUG 1 FIX: read max_risk so frontend can show "4/8" not "4/5"
+        risk_score  = int(result.get("risk_score", 0))
+        max_risk    = int(result.get("max_risk", 8))
+
+        # Everything except the top-level keys goes into details
+        details = {
+            k: v for k, v in result.items()
+            if k not in ["final_decision", "attack_type",
+                         "confidence", "risk_score", "max_risk", "timestamp"]
+        }
     else:
-        raw = _mock_analyze(req.prompt)
-        decision = raw["final_decision"]
+        raw         = _mock_analyze(req.prompt)
+        decision    = raw["final_decision"]
         attack_type = raw["attack_type"]
-        confidence = raw["confidence"]
-        risk_score = raw["risk_score"]
-        details = raw["details"]
+        confidence  = raw["confidence"]
+        risk_score  = raw["risk_score"]
+        max_risk    = raw["max_risk"]
+        details     = {k: v for k, v in raw.items()
+                       if k not in ["final_decision", "attack_type",
+                                    "confidence", "risk_score", "max_risk"]}
 
     latency_ms = round((time.time() - start) * 1000, 2)
 
     log_entry = {
-        "id": str(uuid.uuid4()),
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "id":             str(uuid.uuid4()),
+        "timestamp":      datetime.utcnow().isoformat() + "Z",
         "prompt_snippet": req.prompt[:80] + ("..." if len(req.prompt) > 80 else ""),
-        "full_prompt": req.prompt,
+        "full_prompt":    req.prompt,
         "final_decision": decision,
-        "attack_type": attack_type,
-        "confidence": confidence,
-        "risk_score": risk_score,
-        "latency_ms": latency_ms,
-        "details": details,
+        "attack_type":    attack_type,
+        "confidence":     confidence,
+        "risk_score":     risk_score,
+        "max_risk":       max_risk,
+        "latency_ms":     latency_ms,
+        "details":        details,
     }
     LOG_STORE.append(log_entry)
 
@@ -173,35 +161,41 @@ def analyze_prompt(req: AnalyzeRequest):
 
 @app.get("/logs")
 def get_logs(limit: int = 50, offset: int = 0):
-    """Return paginated intercept logs (most recent first)."""
     logs = list(reversed(LOG_STORE))
     return {
-        "total": len(logs),
+        "total":  len(logs),
         "offset": offset,
-        "limit": limit,
-        "logs": logs[offset: offset + limit],
+        "limit":  limit,
+        "logs":   logs[offset: offset + limit],
     }
 
 
 @app.get("/stats")
 def get_stats():
-    """
-    Dashboard summary statistics.
-    Returns counts, threat level, attack distribution, and 7-day trend.
-    """
-    total = len(LOG_STORE)
+    total   = len(LOG_STORE)
     blocked = [l for l in LOG_STORE if l["final_decision"] == "BLOCK"]
-    safe = [l for l in LOG_STORE if l["final_decision"] == "ALLOW"]
+    safe    = [l for l in LOG_STORE if l["final_decision"] == "ALLOW"]
 
-    injections = sum(1 for l in blocked if l["attack_type"] == "Injection")
-    jailbreaks = sum(1 for l in blocked if l["attack_type"] == "Jailbreak")
-    suspicious = sum(1 for l in blocked if l["attack_type"] == "Suspicious")
+    # BUG 3 FIX: count all attack categories, not just 2
+    attack_counts = {}
+    for l in blocked:
+        cat = l.get("attack_type", "UNKNOWN")
+        attack_counts[cat] = attack_counts.get(cat, 0) + 1
 
-    # Risk score average
-    avg_risk = round(sum(l["risk_score"] for l in LOG_STORE) / total, 1) if total else 0
-    system_risk = min(100, int(avg_risk * 20))  # scale 0-5 → 0-100
+    # Keep backward-compat keys for dashboard
+    injections = sum(v for k, v in attack_counts.items()
+                     if "INJECTION" in k or "INDIRECT" in k or k == "PROMPT_INJECTION")
+    jailbreaks = sum(v for k, v in attack_counts.items()
+                     if "JAILBREAK" in k or "ROLEPLAY" in k or "PERSONA" in k
+                     or "HYPOTHETICAL" in k or "TRAINING" in k)
+    suspicious = sum(v for k, v in attack_counts.items()
+                     if "SUSPICIOUS" in k or "POLICY" in k
+                     or "OVERRIDE" in k or "SYSTEM_PROMPT" in k)
 
-    # Threat level
+    avg_risk    = round(sum(l["risk_score"] for l in LOG_STORE) / total, 1) if total else 0
+    max_r       = LOG_STORE[-1].get("max_risk", 8) if LOG_STORE else 8
+    system_risk = min(100, int((avg_risk / max_r) * 100))
+
     if system_risk >= 70:
         threat_level = "CRITICAL"
     elif system_risk >= 40:
@@ -211,54 +205,49 @@ def get_stats():
     else:
         threat_level = "LOW"
 
-    # 7-day trend
     trend = []
     for i in range(6, -1, -1):
-        day = (datetime.utcnow() - timedelta(days=i)).date()
+        day      = (datetime.utcnow() - timedelta(days=i)).date()
         day_logs = [l for l in LOG_STORE if l["timestamp"].startswith(str(day))]
         trend.append({
-            "date": str(day),
-            "total": len(day_logs),
-            "safe": sum(1 for l in day_logs if l["final_decision"] == "ALLOW"),
+            "date":    str(day),
+            "total":   len(day_logs),
+            "safe":    sum(1 for l in day_logs if l["final_decision"] == "ALLOW"),
             "blocked": sum(1 for l in day_logs if l["final_decision"] == "BLOCK"),
         })
 
-    # Latest events
     last_blocked = next((l for l in reversed(LOG_STORE) if l["final_decision"] == "BLOCK"), None)
-    last_safe = next((l for l in reversed(LOG_STORE) if l["final_decision"] == "ALLOW"), None)
+    last_safe    = next((l for l in reversed(LOG_STORE) if l["final_decision"] == "ALLOW"), None)
 
+    today = str(datetime.utcnow().date())
     return {
-        "total_monitored": total,
-        "blocked_today": len([l for l in blocked if l["timestamp"].startswith(str(datetime.utcnow().date()))]),
-        "safe_analyzed": len([l for l in safe if l["timestamp"].startswith(str(datetime.utcnow().date()))]),
-        "injections_blocked": injections,
-        "jailbreaks_prevented": jailbreaks,
-        "suspicious_flagged": suspicious,
-        "system_risk_score": system_risk,
-        "threat_level": threat_level,
-        "attack_distribution": {
-            "injection": injections,
-            "jailbreak": jailbreaks,
-            "suspicious": suspicious,
-        },
-        "trend_7d": trend,
-        "latest_blocked": last_blocked,
-        "latest_safe": last_safe,
+        "total_monitored":     total,
+        "blocked_today":       len([l for l in blocked if l["timestamp"].startswith(today)]),
+        "safe_analyzed":       len([l for l in safe    if l["timestamp"].startswith(today)]),
+        "injections_blocked":  injections,
+        "jailbreaks_prevented":jailbreaks,
+        "suspicious_flagged":  suspicious,
+        "system_risk_score":   system_risk,
+        "threat_level":        threat_level,
+        "attack_distribution": attack_counts,       # full breakdown now
+        "trend_7d":            trend,
+        "latest_blocked":      last_blocked,
+        "latest_safe":         last_safe,
     }
 
 
 @app.get("/pipeline/status")
 def pipeline_status():
-    """Health check for each pipeline component."""
     components = [
-        {"id": "rule_engine",        "name": "Rule Engine",      "status": "active"},
-        {"id": "intent_classifier",  "name": "Intent Model",     "status": "active" if REAL_PIPELINE else "active"},
-        {"id": "jailbreak_model",    "name": "Jailbreak Model",  "status": "active" if REAL_PIPELINE else "active"},
-        {"id": "guard_llm",          "name": "Guard LLM",        "status": "active" if REAL_PIPELINE else "active"},
-        {"id": "agent_monitor",      "name": "Agent Monitor",    "status": "active"},
+        {"id": "preprocessor",      "name": "Preprocessor",    "status": "active"},
+        {"id": "rule_engine",       "name": "Rule Engine",     "status": "active"},
+        {"id": "intent_classifier", "name": "Intent Model",    "status": "active" if REAL_PIPELINE else "mock"},
+        {"id": "jailbreak_model",   "name": "Jailbreak Model", "status": "active" if REAL_PIPELINE else "mock"},
+        {"id": "guard_llm",         "name": "Guard LLM",       "status": "active" if REAL_PIPELINE else "mock"},
+        {"id": "agent_monitor",     "name": "Agent Monitor",   "status": "active"},
     ]
     return {
-        "overall": "operational",
+        "overall":              "operational",
         "real_pipeline_loaded": REAL_PIPELINE,
-        "components": components,
+        "components":           components,
     }

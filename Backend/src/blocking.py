@@ -1,16 +1,3 @@
-"""
-blocking.py — CyberWatch AI Blocking Module
-============================================
-Generates a custom LLM-based warning response when a prompt is blocked.
-Import this anywhere: chatbot, FastAPI endpoint, CLI, etc.
-
-Usage:
-    from blocking import BlockingHandler
-    handler = BlockingHandler()
-    response = handler.handle(user_prompt, security_result)
-    # response is a string — treat it exactly like a normal LLM reply
-"""
-
 import json
 import uuid
 import os

@@ -13,15 +13,17 @@ const fmt = (iso) => {
   return new Date(iso).toLocaleTimeString("en-GB", { hour12: false });
 };
 
-const RISK_COLOR = (score) => {
-  if (score >= 4) return "#ff4757";
-  if (score >= 2) return "#ffa502";
+const RISK_COLOR = (score, max = 8) => {
+  const pct = score / max;
+  if (pct >= 0.5) return "#ff4757";
+  if (pct >= 0.25) return "#ffa502";
   return "#2ed573";
 };
 
 const DECISION_COLOR = (d) => (d === "BLOCK" ? "#ff4757" : "#2ed573");
 
 const PIPE_ICONS = {
+  preprocessor:      "🔍",
   rule_engine:       "🛡",
   intent_classifier: "🧠",
   jailbreak_model:   "🔐",
@@ -544,10 +546,34 @@ const css = `
     font-weight: 500;
     white-space: nowrap;
   }
+  /* safe */
+  .cw-type-chip.SAFE,
   .cw-type-chip.Safe       { color: #4a6a80; background: rgba(74,106,128,0.12); border: 1px solid rgba(74,106,128,0.2); }
-  .cw-type-chip.Injection  { color: #ffa502; background: rgba(255,165,2,0.1); border: 1px solid rgba(255,165,2,0.25); }
-  .cw-type-chip.Jailbreak  { color: #ff4757; background: rgba(255,71,87,0.1); border: 1px solid rgba(255,71,87,0.25); }
+  /* injection family */
+  .cw-type-chip.PROMPT_INJECTION,
+  .cw-type-chip.Injection,
+  .cw-type-chip.INDIRECT_INJECTION  { color: #ffa502; background: rgba(255,165,2,0.1); border: 1px solid rgba(255,165,2,0.25); }
+  /* jailbreak family */
+  .cw-type-chip.JAILBREAK,
+  .cw-type-chip.Jailbreak,
+  .cw-type-chip.ROLEPLAY_JAILBREAK,
+  .cw-type-chip.PERSONA_SWAP,
+  .cw-type-chip.HYPOTHETICAL_BYPASS,
+  .cw-type-chip.TRAINING_MODE_EXPLOIT { color: #ff4757; background: rgba(255,71,87,0.1); border: 1px solid rgba(255,71,87,0.25); }
+  /* policy / override family */
+  .cw-type-chip.POLICY_BYPASS,
+  .cw-type-chip.INSTRUCTION_OVERRIDE,
+  .cw-type-chip.SYSTEM_PROMPT_EXTRACTION,
+  .cw-type-chip.COORDINATED_ATTACK,
   .cw-type-chip.Suspicious { color: #9d7bff; background: rgba(157,123,255,0.1); border: 1px solid rgba(157,123,255,0.25); }
+  /* preprocessor types */
+  .cw-type-chip.SUSPICIOUS_PATTERN,
+  .cw-type-chip.BASE64_ENCODING,
+  .cw-type-chip.FRAGMENTED_INSTRUCTIONS,
+  .cw-type-chip.LANGUAGE_SWITCHING,
+  .cw-type-chip.MULTI_TURN_ATTACK,
+  .cw-type-chip.CONVERSATION_HISTORY_INJECTION,
+  .cw-type-chip.WEBPAGE_POISONING { color: #00d4ff; background: rgba(0,212,255,0.08); border: 1px solid rgba(0,212,255,0.2); }
 
   /* ── LIVE ── */
   .cw-live {
@@ -789,8 +815,8 @@ function PromptInspector({ onNewLog }) {
             <span className="cw-result-decision" style={{ color: DECISION_COLOR(result.final_decision) }}>
               ● {result.final_decision}
             </span>
-            <span className="cw-result-risk" style={{ color: RISK_COLOR(result.risk_score) }}>
-              RISK {result.risk_score}/5
+            <span className="cw-result-risk" style={{ color: RISK_COLOR(result.risk_score, result.max_risk) }}>
+              RISK {result.risk_score}/{result.max_risk ?? 8}
             </span>
           </div>
           <div className="cw-detail-row">
@@ -804,8 +830,10 @@ function PromptInspector({ onNewLog }) {
           {result.details?.rule_engine && (
             <div className="cw-detail-row">
               <span className="cw-detail-key">Rule Engine</span>
-              <span className="cw-detail-val" style={{ color: result.details.rule_engine.triggered ? "var(--amber)" : "var(--green)" }}>
-                {result.details.rule_engine.triggered ? `⚠ ${result.details.rule_engine.pattern}` : "✓ Clean"}
+              <span className="cw-detail-val" style={{ color: (result.details.rule_engine.hits?.length > 0 || result.details.rule_engine.triggered) ? "var(--amber)" : "var(--green)" }}>
+                {(result.details.rule_engine.hits?.length > 0 || result.details.rule_engine.triggered)
+                  ? `⚠ ${result.details.rule_engine.hits?.length ?? 1} hit(s)`
+                  : "✓ Clean"}
               </span>
             </div>
           )}
@@ -813,21 +841,32 @@ function PromptInspector({ onNewLog }) {
             <div className="cw-detail-row">
               <span className="cw-detail-key">Intent</span>
               <span className="cw-detail-val">
-                {result.details.intent_classifier.label} ({(result.details.intent_classifier.score * 100).toFixed(0)}%)
+                {result.details.intent_classifier.intent ?? result.details.intent_classifier.label ?? "—"}
+                {" "}({((result.details.intent_classifier.confidence ?? result.details.intent_classifier.score ?? 0) * 100).toFixed(0)}%)
               </span>
             </div>
           )}
-          {result.details?.jailbreak_model && (
+          {(result.details?.jailbreak_detector || result.details?.jailbreak_model) && (
             <div className="cw-detail-row">
               <span className="cw-detail-key">Jailbreak Prob.</span>
-              <span className="cw-detail-val">{(result.details.jailbreak_model.probability * 100).toFixed(0)}%</span>
+              <span className="cw-detail-val">
+                {((result.details.jailbreak_detector?.probability ?? result.details.jailbreak_model?.probability ?? 0) * 100).toFixed(0)}%
+              </span>
             </div>
           )}
           {result.details?.guard_llm && (
             <div className="cw-detail-row">
               <span className="cw-detail-key">Guard LLM</span>
-              <span className="cw-detail-val" style={{ fontSize: 10, color: "var(--muted)", maxWidth: 190, textAlign: "right" }}>
-                {result.details.guard_llm.reason}
+              <span className="cw-detail-val" style={{ color: result.details.guard_llm.result?.is_blocked ? "var(--red)" : "var(--green)" }}>
+                {result.details.guard_llm.decision ?? (result.details.guard_llm.result?.is_blocked ? "BLOCK" : "SAFE")}
+              </span>
+            </div>
+          )}
+          {result.details?.preprocessor?.detected_attacks?.length > 0 && (
+            <div className="cw-detail-row">
+              <span className="cw-detail-key">Preprocessor</span>
+              <span className="cw-detail-val" style={{ color: "var(--amber)", fontSize: 10 }}>
+                ⚠ {result.details.preprocessor.detected_attacks.join(", ")}
               </span>
             </div>
           )}
@@ -889,9 +928,9 @@ function LogsPage({ logs }) {
                     <td>
                       <div className="cw-risk-bar-wrap">
                         <div className="cw-risk-bar">
-                          <div className="cw-risk-bar-fill" style={{ width: `${(l.risk_score / 5) * 100}%`, background: RISK_COLOR(l.risk_score) }} />
+                          <div className="cw-risk-bar-fill" style={{ width: `${(l.risk_score / (l.max_risk ?? 8)) * 100}%`, background: RISK_COLOR(l.risk_score, l.max_risk ?? 8) }} />
                         </div>
-                        <span style={{ color: RISK_COLOR(l.risk_score), fontFamily: "var(--mono)", fontSize: 10, minWidth: 16 }}>{l.risk_score}</span>
+                        <span style={{ color: RISK_COLOR(l.risk_score, l.max_risk ?? 8), fontFamily: "var(--mono)", fontSize: 10, minWidth: 16 }}>{l.risk_score}</span>
                       </div>
                     </td>
                   </tr>
@@ -907,14 +946,16 @@ function LogsPage({ logs }) {
 
 // ─── ANALYTICS PAGE ───────────────────────────────────────────────────────────
 function AnalyticsPage({ stats }) {
-  const PIE_COLORS = ["#ffa502", "#ff4757", "#9d7bff", "#2ed573"];
+  const PIE_COLORS = ["#ffa502", "#ff4757", "#9d7bff", "#00d4ff", "#2ed573", "#ffd32a", "#ff6b81", "#7bed9f"];
   const dist = stats?.attack_distribution || {};
-  const safeCount = Math.max(0, (stats?.total_monitored || 0) - (dist.injection || 0) - (dist.jailbreak || 0) - (dist.suspicious || 0));
+
+  // Build pie from all attack categories returned by the API
+  const attackEntries = Object.entries(dist).filter(([k]) => k !== "SAFE" && k !== "Safe");
+  const safeCount = Math.max(0, (stats?.total_monitored || 0) - attackEntries.reduce((s, [, v]) => s + v, 0));
+
   const pieData = [
-    { name: "Injection",  value: dist.injection  || 0 },
-    { name: "Jailbreak",  value: dist.jailbreak  || 0 },
-    { name: "Suspicious", value: dist.suspicious || 0 },
-    { name: "Safe",       value: safeCount },
+    ...attackEntries.map(([name, value]) => ({ name, value })),
+    ...(safeCount > 0 ? [{ name: "SAFE", value: safeCount }] : []),
   ].filter((d) => d.value > 0);
 
   return (
