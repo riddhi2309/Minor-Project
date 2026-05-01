@@ -1,19 +1,3 @@
-"""
-security_pipeline.py — CyberWatch AI
-======================================
-Fixed version. Changes from previous:
-
-  BUG 1 FIXED — Risk score capped at MAX_RISK (8), display-safe
-  BUG 2 FIXED — Intent NaN: intent_inference returns "intent"+"confidence"
-                confirmed — was a frontend confidence key mismatch, now
-                always returned explicitly in result dict
-  BUG 3 FIXED — Attack type now uses full ATTACK_FINGERPRINTS (8 categories)
-                instead of hardcoded if/elif with only 2 types
-  BUG 4 FIXED — ALLOW decisions always return attack_type = "SAFE"
-  BUG 5 FIXED — PromptPreprocessor now runs first, handles multi-turn,
-                language switching, base64, fragments, fake history, URLs
-"""
-
 import os
 import torch
 import torch.nn.functional as F
@@ -25,7 +9,7 @@ from intent_inference     import IntentClassifier
 from guard_llm            import GuardLLM
 from agent_monitor        import AgentMonitor
 from prompt_preprocessor  import PromptPreprocessor
-
+from Autonomous_learner   import AutonomousLearner
 
 # ── Risk thresholds ────────────────────────────────────────────────────────────
 BLOCK_THRESHOLD       = 3     # risk score >= this → BLOCK
@@ -74,6 +58,7 @@ class SecurityPipeline:
         self.jb_tokenizer = AutoTokenizer.from_pretrained(JB_MODEL_PATH)
         self.jb_model     = AutoModelForSequenceClassification.from_pretrained(JB_MODEL_PATH)
         self.jb_model.eval()
+        self.learner = AutonomousLearner()
 
         print("Security Pipeline Ready.\n")
 
@@ -120,6 +105,7 @@ class SecurityPipeline:
 
         # ── BUG 5 FIX: Preprocessor runs first ───────────────────────────────
         pre = self.preprocessor.process(text)
+        thresholds = self.learner.thresholds()
 
         # Hard block if preprocessor is certain (risk_boost >= 3)
         if pre.risk_boost >= 3:
@@ -315,4 +301,5 @@ class SecurityPipeline:
 
             # ── Meta ──────────────────────────────────────────────────────
             "timestamp": datetime.utcnow().isoformat() + "Z",
+            
         }
